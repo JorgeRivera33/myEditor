@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Selecto + Moveable Fixed</title>
+    <script src="https://daybrush.com/moveable/release/latest/dist/moveable.min.js"></script>
+    <script src="https://daybrush.com/selecto/release/latest/dist/selecto.min.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { 
+            position: relative; width: 1024px; height: 576px; 
+            border: 2px solid #eee; background: #fafafa; 
+            overflow: hidden; touch-action: none;
+        }
+        .target { 
+            position: absolute; width: 100px; height: 100px; top: 50px;
+            background: #4af; color: white; display: flex;
+            align-items: center; justify-content: center;
+            user-select: none;
+        }
+        .target:nth-child(2) { left: 150px; background: #f4a; }
+        .target:nth-child(3) { left: 300px; background: #4b5; }
+        
+        .selecto-selection { 
+            background: rgba(68, 170, 255, 0.2) !important; 
+            border: 1px solid #4af !important;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="container">
+        <div class="target">1</div>
+        <div class="target">2</div>
+        <div class="target">3</div>
+    </div>
+
+    <script>
+        const container = document.getElementById('container');
+
+        const moveable = new Moveable(container, {
+            target: [],
+            draggable: true,
+        }).on("drag", e => {
+            e.target.style.transform = e.transform;
+        }).on("dragGroup", e => {
+            e.events.forEach(ev => {
+                ev.target.style.transform = ev.transform;
+            });
+        });
+
+        const selecto = new Selecto({
+            container: container,
+            dragContainer: container,
+            selectableTargets: [".target"],
+            hitRate: 0,
+            selectByClick: true,
+            selectFromInside: false,
+        });
+
+        // --- LÓGICA DE SINCRONIZACIÓN CORREGIDA ---
+
+        selecto.on("dragStart", e => {
+            const target = e.inputEvent.target;
+            
+            // Verificamos si hay targets actuales y los normalizamos a un Array para evitar el error .some
+            const currentTargets = moveable.target 
+                ? (Array.isArray(moveable.target) ? moveable.target : [moveable.target]) 
+                : [];
+
+            // 1. Si clicamos en un manejador de Moveable, no iniciar selección
+            if (moveable.isMoveableElement(target)) {
+                e.stop();
+                return;
+            }
+            
+            // 2. Si el clic es sobre un elemento ya seleccionado, detenemos Selecto para que Moveable arrastre
+            const isTargetSelected = currentTargets.some(t => t === target || t.contains(target));
+            if (isTargetSelected) {
+                e.stop();
+            }
+        }).on("select", e => {
+            // Siempre pasamos el array de seleccionados a Moveable
+            moveable.target = e.selected;
+        }).on("selectEnd", e => {
+            // Si hacemos clic en el vacío, limpiamos la selección
+            if (e.isClick && !e.selected.length) {
+                moveable.target = [];
+            }
+        });
+
+        // para asignar el target a Moveable antes de que él mismo procese el click
+        window.addEventListener("mousedown", (e) => {
+            //closest es un selector que busca el elemento más cercano al click que contenga la clase .target
+            const el = e.target.closest(".target"); // Busca si el click fue en un .target
+                    
+            if (el) {
+                moveable.target = el; // Se lo asignamos al vuelo
+                moveable.waitToChangeTarget().then(() => {
+                    moveable.dragStart(e); // Forzamos el inicio del arrastre manualmente
+                });
+            }
+        }, true);
+    </script>
+</body>
+</html>
