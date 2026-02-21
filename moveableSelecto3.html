@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Selecto + Moveable Fixed</title>
+    <script src="https://daybrush.com/moveable/release/latest/dist/moveable.min.js"></script>
+    <script src="https://daybrush.com/selecto/release/latest/dist/selecto.min.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { 
+            position: relative; width: 1024px; height: 576px; 
+            border: 2px solid #eee; background: #fafafa; 
+            overflow: hidden; touch-action: none;
+        }
+        .target { 
+            position: absolute; width: 100px; height: 100px; top: 50px; left: 100px;
+            background: #4af; color: white; display: flex;
+            align-items: center; justify-content: center;
+            user-select: none;
+        }
+        .dropzone{
+            position: absolute; width: 100px; height: 100px; top: 50px;
+            background: #4af; color: white; display: flex;
+            align-items: center; justify-content: center;
+            user-select: none;
+        }
+        #dropzone1{ left: 800px; background: #f4a; }
+        #dropzone2{ left: 800px; background: #4b5; top: 200px;}
+        
+        .selecto-selection { 
+            background: rgba(68, 170, 255, 0.2) !important; 
+            border: 1px solid #4af !important;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="container">
+        <div class="dropzone" id="dropzone1">1</div>
+        <div class="dropzone" id="dropzone2">2</div>
+        <div class="target" data-id="target-1">1</div>
+        <div class="target" data-id="target-2">2</div>
+    </div>
+
+    <button id="btnVerificar" style="position: absolute; bottom: 20px; right: 20px; padding: 10px 25px; cursor: pointer;">
+        Verificar Resultados
+    </button>
+
+    <script>
+        const configuracionCorrecta = {
+            "target-1": "dropzone1",
+            "target-2": "dropzone2"
+        };
+        // Este objeto guardará quién está dónde actualmente
+        let estadoOcupacion = {
+            "dropzone1": null, // Guardará el ID del target o el elemento
+            "dropzone2": null
+        };
+
+        const container = document.getElementById('container');
+        let zonasCache = [];
+        let dropzones = document.querySelectorAll('.dropzone');
+        const posicionesIniciales = {};
+
+        const moveable = new Moveable(container, {
+            target: [],
+            draggable: true,
+        }).on("dragStart", e => {
+            cachearDropZones();
+            liberarZonaDeEstado(e.target);
+        }).on("drag", e => {
+            //e.target.style.transform = e.transform;
+            e.target.style.left = e.left + 'px';
+            e.target.style.top = e.top + 'px';
+            resaltarDropZoneEnColision(e.target, zonasCache);
+        }).on("dragEnd", e => {
+            let zonasEnColision = obtenerZonasColisionadas(e.target);
+            if(zonasEnColision.length > 0){
+                centrarEnDropZone(e.target, zonasEnColision[0]);
+                console.log("Elemento centrado en:", zonasEnColision[0].id);
+            }else{
+                console.log('no esta colisionando')
+                restablecerTarget(e.target);
+                liberarZonaDeEstado(e.target);
+            } 
+        }).on("dragGroup", e => {
+            e.events.forEach(ev => {
+                //ev.target.style.transform = ev.transform;
+                ev.target.style.left = ev.left + 'px';
+                ev.target.style.top = ev.top + 'px';
+            });
+            resaltarDropZoneEnColision(e.target, zonasCache);            
+        }).on("dragGroupEnd", e => {
+            //centramos los targets seleccionados en el primer contenedor
+            let zonasEnColision = obtenerZonasColisionadas(e.target);
+            if(zonasEnColision.length > 0){
+                e.targets.forEach(target => {
+                    centrarEnDropZone(target, zonasEnColision[0]);
+                });
+            }else{
+                e.targets.forEach(target => {
+                    restablecerTarget(target);
+                });
+            }   
+        })
+
+        const selecto = new Selecto({
+            container: container,
+            dragContainer: container,
+            selectableTargets: [".target"],
+            hitRate: 0,
+            selectByClick: true,
+            selectFromInside: false,
+        });
+
+        // --- LÓGICA DE SINCRONIZACIÓN CORREGIDA ---
+
+        selecto.on("dragStart", e => {
+            const target = e.inputEvent.target;
+            
+            // Verificamos si hay targets actuales y los normalizamos a un Array para evitar el error .some
+            const currentTargets = moveable.target 
+                ? (Array.isArray(moveable.target) ? moveable.target : [moveable.target]) 
+                : [];
+
+            // 1. Si clicamos en un manejador de Moveable, no iniciar selección
+            if (moveable.isMoveableElement(target)) {
+                e.stop();
+                return;
+            }
+            
+            // 2. Si el clic es sobre un elemento ya seleccionado, detenemos Selecto para que Moveable arrastre
+            const isTargetSelected = currentTargets.some(t => t === target || t.contains(target));
+            if (isTargetSelected) {
+                e.stop();
+            }
+        }).on("select", e => {
+            // Siempre pasamos el array de seleccionados a Moveable
+            moveable.target = e.selected;
+        }).on("selectEnd", e => {
+            // Si hacemos clic en el vacío, limpiamos la selección
+            if (e.isClick && !e.selected.length) {
+                moveable.target = [];
+            }
+        });
+
+        // para asignar el target a Moveable antes de que él mismo procese el click
+        window.addEventListener("mousedown", (e) => {
+            //closest es un selector que busca el elemento más cercano al click que contenga la clase .target
+            const el = e.target.closest(".target"); // Busca si el click fue en un .target
+                    
+            if (el) {
+                moveable.target = el; // Se lo asignamos al vuelo
+                moveable.waitToChangeTarget().then(() => {
+                    moveable.dragStart(e); // Forzamos el inicio del arrastre manualmente
+                });
+            }
+        }, true);
+
+        function resaltarDropZoneEnColision(target, zonasCache){
+            const zonasEnColision = [];
+            const targetRect = target.getBoundingClientRect();
+            for(let zona of zonasCache){
+                const z = zona.rect;
+                const isColliding = !(
+                    targetRect.right < z.left ||
+                    targetRect.left > z.right ||
+                    targetRect.bottom < z.top ||
+                    targetRect.top > z.bottom
+                );
+
+                if (isColliding) {
+                    aplicarEstilosAdropZone(zona.element);
+                } else {
+                    borrarEstilosDeDropZone(zona.element);
+                }
+            }
+        }
+        function obtenerZonasColisionadas(targetElement) {
+            const targetRect = targetElement.getBoundingClientRect();
+            return zonasCache.filter(zona => {
+                const z = zona.rect;
+                return !(
+                    targetRect.right < z.left ||
+                    targetRect.left > z.right ||
+                    targetRect.bottom < z.top ||
+                    targetRect.top > z.bottom
+                );
+            });
+        }
+
+        // 3. Resaltar usando la lógica anterior
+        function resaltarDropZoneEnColision(target, zonasCache) {
+            const colisionadas = obtenerZonasColisionadas(target).map(z => z.element);
+            
+            zonasCache.forEach(zona => {
+                if (colisionadas.includes(zona.element)) {
+                    aplicarEstilosAdropZone(zona.element);
+                } else {
+                    borrarEstilosDeDropZone(zona.element);
+                }
+            });
+        }
+        function aplicarEstilosAdropZone(dropzone){
+            dropzone.style.transform = 'scale(1.2)';
+        }
+        function borrarEstilosDeDropZone(dropzone){
+            dropzone.style.transform = 'scale(1)';
+        }
+        function cachearDropZones(){
+            zonasCache = Array.from(dropzones).map(zone => ({
+                element: zone,
+                rect: zone.getBoundingClientRect()
+            }));
+        }
+        function regresarAPosicionOriginal(target) {
+            const original = posicionesIniciales[target.id];
+            
+            target.style.left = `${original.left}px`;
+            target.style.top = `${original.top}px`;
+            target.style.transform = 'scale(1)'; // Restauramos tamaño original
+            target.style.backgroundColor = ""; // Limpiamos colores de error
+            
+            // Sincronizamos Moveable
+            moveable.updateRect();
+        }
+        function centrarEnDropZone(target, zonaElement) {
+            const zoneId = zonaElement.element.id;
+            const targetId = target.id;
+
+            // 1. ¿Está la zona ya ocupada por OTRO target?
+            if (estadoOcupacion[zoneId] !== null && estadoOcupacion[zoneId] !== target) {
+                console.log("Zona ocupada, regresando...");
+                restablecerTarget(target);
+                regresarAPosicionOriginal(target);
+                return; 
+            }
+
+            // 2. Si no está ocupada, procedemos al centrado que ya tenías
+            const zoneRect = zonaElement.rect;
+            const containerRect = container.getBoundingClientRect();
+
+            const targetWidth = 50; // Supongamos que lo encogemos
+            const targetHeight = 50;
+
+            const finalLeft = (zoneRect.left - containerRect.left) + (zoneRect.width - targetWidth) / 2;
+            const finalTop = (zoneRect.top - containerRect.top) + (zoneRect.height - targetHeight) / 2;
+
+            target.style.width = `${targetWidth}px`;
+            target.style.height = `${targetHeight}px`;
+            target.style.left = `${finalLeft}px`;
+            target.style.top = `${finalTop}px`;
+
+            // 3. Registrar ocupación
+            estadoOcupacion[zoneId] = target;
+            
+            moveable.updateRect();
+
+            // 4. Tu evaluación de "Es el lugar correcto"
+            evaluarAcierto(target, zoneId);
+        }
+        function evaluarAcierto(target, zoneId){
+            const targetId = target.getAttribute('data-id'); // Recomiendo usar data-attributes para IDs lógicos
+    
+            if (configuracionCorrecta[targetId] === zoneId) {
+                console.log("¡Correcto! El target encaja.");
+                //target.style.backgroundColor = "#4b5"; // Verde éxito
+            } else {
+                console.log("Incorrecto. Esta no es su zona.");
+                //target.style.backgroundColor = "#f44"; // Rojo error
+            }
+        }
+        function restablecerTarget(target){
+            target.style.width = '100px';
+            target.style.height = '100px';
+        }
+        function capturarPosicionesIniciales(){
+            // Registramos las posiciones al cargar
+            document.querySelectorAll('.target').forEach((el, index) => {
+                // Si no tiene ID, le asignamos uno basado en su índice o contenido
+                const id = el.getAttribute('data-id') || `target-${index}`; 
+                el.id = id; 
+                
+                posicionesIniciales[id] = {
+                    left: el.offsetLeft,
+                    top: el.offsetTop
+                };
+            });
+        }
+        function regresarAPosicionOriginal(target) {
+            const original = posicionesIniciales[target.getAttribute('data-id')];
+            
+            target.style.left = `${original.left}px`;
+            target.style.top = `${original.top}px`;
+            target.style.transform = 'scale(1)'; // Restauramos tamaño original
+            target.style.backgroundColor = ""; // Limpiamos colores de error
+            
+            // Sincronizamos Moveable
+            moveable.updateRect();
+        }
+        function liberarZonaDeEstado(target){
+            // Liberar la zona en el estado
+            for (let z in estadoOcupacion) {
+                if (estadoOcupacion[z] === target) {
+                    estadoOcupacion[z] = null;
+                }
+            }
+        }
+        document.getElementById('btnVerificar').addEventListener('click', () => {
+            let aciertos = 0;
+            const totalNecesario = Object.keys(configuracionCorrecta).length;
+
+            for (let targetId in configuracionCorrecta) {
+                const zonaCorrecta = configuracionCorrecta[targetId];
+                const targetElement = document.getElementById(targetId);
+                
+                // Buscamos si el target está en la zona que le corresponde en nuestro JSON de ocupación
+                if (estadoOcupacion[zonaCorrecta] === targetElement) {
+                    aciertos++;
+                }
+            }
+
+            if (aciertos === totalNecesario) {
+                finalizarActividad();
+            } else {
+                alert(`Aún te faltan ${totalNecesario - aciertos} aciertos. ¡Sigue intentando!`);
+            }
+        });
+
+        function finalizarActividad() {
+            // 1. Desactivamos Moveable y Selecto para que ya no se pueda mover nada
+            moveable.draggable = false;
+            selecto.selectableTargets = [];
+            
+            // 2. Cambiamos visualmente el botón
+            const btn = document.getElementById('btnVerificar');
+            btn.innerText = "¡Actividad Completada!";
+            btn.style.backgroundColor = "#4b5";
+            btn.disabled = true;
+
+            // 3. Mostrar feedback visual profesional (Overlay)
+            mostrarCelebracion();
+        }
+
+        function mostrarCelebracion() {
+            const overlay = document.createElement('div');
+            overlay.innerHTML = `
+                <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                            background: rgba(0,0,0,0.7); display: flex; align-items: center; 
+                            justify-content: center; z-index: 1000; color: white; 
+                            font-family: sans-serif; animation: fadeIn 0.5s;">
+                    <div style="text-align: center; background: #333; padding: 40px; border-radius: 15px; border: 2px solid #4b5;">
+                        <h1 style="margin: 0;">¡Excelente Trabajo! 🏆</h1>
+                        <p>Has emparejado todos los elementos correctamente.</p>
+                        <button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px;">Reiniciar</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+        }
+        capturarPosicionesIniciales();
+
+        //si en algún momento necesito que los elementos se separen en los dropzones con los cuales colisionan
+        /*
+        //en dragGroupEnd
+        e.targets.forEach(target => {
+            let zonasEnColision = obtenerZonasColisionadas(target);
+            if(zonasEnColision.length > 0){
+                centrarEnDropZone(target, zonasEnColision[0]);
+            } else {
+                restablecerTarget(target);
+            }
+        }); 
+        */ 
+    </script>
+</body>
+</html>
