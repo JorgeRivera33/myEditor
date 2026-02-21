@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Selecto + Moveable Fixed</title>
+    <script src="https://daybrush.com/moveable/release/latest/dist/moveable.min.js"></script>
+    <script src="https://daybrush.com/selecto/release/latest/dist/selecto.min.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { 
+            position: relative; width: 1024px; height: 576px; 
+            border: 2px solid #eee; background: #fafafa; 
+            overflow: hidden; touch-action: none;
+        }
+        .target { 
+            position: absolute; width: 100px; height: 100px; top: 50px; left: 100px;
+            background: #4af; color: white; display: flex;
+            align-items: center; justify-content: center;
+            user-select: none;
+        }
+        .dropzone{
+            position: absolute; width: 100px; height: 100px; top: 50px;
+            background: #4af; color: white; display: flex;
+            align-items: center; justify-content: center;
+            user-select: none;
+        }
+        #dropzone1{ left: 800px; background: #f4a; }
+        #dropzone2{ left: 800px; background: #4b5; top: 200px;}
+        
+        .selecto-selection { 
+            background: rgba(68, 170, 255, 0.2) !important; 
+            border: 1px solid #4af !important;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="container">
+        <div class="dropzone" id="dropzone1">2</div>
+        <div class="dropzone" id="dropzone2">3</div>
+        <div class="target">1</div>
+        <div class="target">2</div>
+    </div>
+
+    <script>
+        const container = document.getElementById('container');
+        let zonasCache = [];
+        let dropzones = document.querySelectorAll('.dropzone');
+
+        const moveable = new Moveable(container, {
+            target: [],
+            draggable: true,
+        }).on("drag", e => {
+            //e.target.style.transform = e.transform;
+            e.target.style.left = e.left + 'px';
+            e.target.style.top = e.top + 'px';
+            resaltarDropZoneEnColision(e.target, zonasCache);
+        }).on("dragEnd", e => {
+            let zonasEnColision = colisionaEnDragEnd(e.target, zonasCache);
+            if(zonasEnColision.length > 0){
+                console.log(zonasEnColision);
+                console.log(moveable.target) 
+            } 
+        }).on("dragGroup", e => {
+            e.events.forEach(ev => {
+                //ev.target.style.transform = ev.transform;
+                ev.target.style.left = ev.left + 'px';
+                ev.target.style.top = ev.top + 'px';
+            });
+            resaltarDropZoneEnColision(e.target, zonasCache);            
+        }).on("dragGroupEnd", e => {
+            let zonasEnColision = colisionaEnDragEnd(e.target, zonasCache);
+            if(zonasEnColision.length > 0){
+                console.log(zonasEnColision);
+                console.log(moveable.target) 
+            }   
+        })
+
+        const selecto = new Selecto({
+            container: container,
+            dragContainer: container,
+            selectableTargets: [".target"],
+            hitRate: 0,
+            selectByClick: true,
+            selectFromInside: false,
+        });
+
+        // --- LÓGICA DE SINCRONIZACIÓN CORREGIDA ---
+
+        selecto.on("dragStart", e => {
+            const target = e.inputEvent.target;
+            
+            // Verificamos si hay targets actuales y los normalizamos a un Array para evitar el error .some
+            const currentTargets = moveable.target 
+                ? (Array.isArray(moveable.target) ? moveable.target : [moveable.target]) 
+                : [];
+
+            // 1. Si clicamos en un manejador de Moveable, no iniciar selección
+            if (moveable.isMoveableElement(target)) {
+                e.stop();
+                return;
+            }
+            
+            // 2. Si el clic es sobre un elemento ya seleccionado, detenemos Selecto para que Moveable arrastre
+            const isTargetSelected = currentTargets.some(t => t === target || t.contains(target));
+            if (isTargetSelected) {
+                e.stop();
+            }
+        }).on("select", e => {
+            // Siempre pasamos el array de seleccionados a Moveable
+            moveable.target = e.selected;
+        }).on("selectEnd", e => {
+            // Si hacemos clic en el vacío, limpiamos la selección
+            if (e.isClick && !e.selected.length) {
+                moveable.target = [];
+            }
+        });
+
+        // para asignar el target a Moveable antes de que él mismo procese el click
+        window.addEventListener("mousedown", (e) => {
+            //closest es un selector que busca el elemento más cercano al click que contenga la clase .target
+            const el = e.target.closest(".target"); // Busca si el click fue en un .target
+                    
+            if (el) {
+                moveable.target = el; // Se lo asignamos al vuelo
+                moveable.waitToChangeTarget().then(() => {
+                    moveable.dragStart(e); // Forzamos el inicio del arrastre manualmente
+                });
+            }
+        }, true);
+
+        function resaltarDropZoneEnColision(target, zonasCache){
+            const zonasEnColision = [];
+            const targetRect = target.getBoundingClientRect();
+            for(let zona of zonasCache){
+                const z = zona.rect;
+                const isColliding = !(
+                    targetRect.right < z.left ||
+                    targetRect.left > z.right ||
+                    targetRect.bottom < z.top ||
+                    targetRect.top > z.bottom
+                );
+
+                if (isColliding) {
+                    aplicarEstilosAdropZone(zona.element);
+                } else {
+                    borrarEstilosDeDropZone(zona.element);
+                }
+            }
+        }
+        function colisionaEnDragEnd(target, zonasCache){
+            const zonasEnColision = [];
+            const targetRect = target.getBoundingClientRect();
+            for(let zona of zonasCache){
+                const z = zona.rect;
+                const isColliding = !(
+                    targetRect.right < z.left ||
+                    targetRect.left > z.right ||
+                    targetRect.bottom < z.top ||
+                    targetRect.top > z.bottom
+                );
+
+                if (isColliding) {
+                    zonasEnColision.push(zona.element);
+                }
+            }
+            return(zonasEnColision);
+        }
+        function evaluarOverlaping(target) {
+            const targetRect = target.getBoundingClientRect();
+
+            zonasCache.forEach(zona => {
+                const z = zona.rect;
+                const isColliding = !(
+                    targetRect.right < z.left ||
+                    targetRect.left > z.right ||
+                    targetRect.bottom < z.top ||
+                    targetRect.top > z.bottom
+                );
+
+                if (isColliding) {
+                    aplicarEstilosAdropZone(zona.element);
+                    target.zonaColision = zona.element;
+                } else {
+                    borrarEstilosDeDropZone(zona.element);
+                }
+            });
+        }
+        function aplicarEstilosAdropZone(dropzone){
+            dropzone.style.transform = 'scale(1.2)';
+        }
+        function borrarEstilosDeDropZone(dropzone){
+            dropzone.style.transform = 'scale(1)';
+        }
+        function cachearDropZones(){
+            zonasCache = Array.from(dropzones).map(zone => ({
+                element: zone,
+                rect: zone.getBoundingClientRect()
+            }));
+        }
+        cachearDropZones();
+        console.log(zonasCache);
+    </script>
+</body>
+</html>
